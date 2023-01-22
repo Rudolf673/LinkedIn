@@ -1,0 +1,55 @@
+-- You may reah me at rudolf673@yahoo.com if you wish to do so
+-- for your input on my soluntion.
+-- Thank you.
+-- If I may request, Can you create a course on extrapolation and smoothing.
+-- It will be educationally fun 8-)
+
+with base_cte as (
+	SELECT 	sensor,Time, 
+			Temperature
+	FROM 	MinuteTemperature
+	--WHERE   Sensor ='Coolant'),
+	),
+	CreateGrouper as (
+		select * 
+			, min(KnownTemperatureTime) over (partition by sensor order by time rows between current row and unbounded following) as NextGrouper
+			, max(KnownTemperatureTime) over (partition by sensor order by time rows between unbounded preceding and current row) as PrevGrouper
+			from base_cte 
+			cross apply ( values ( case when Temperature is not null then time	
+									else null
+									end
+								)
+						) as KnownTemperature (KnownTemperatureTime)
+		)
+		--select * from CreateGrouper --order by 1,2 desc
+		,
+	Get_Next_Prev_Temperatures as (
+	   select * 
+		,max(temperature) over (partition by sensor, NextGrouper) as NextKnownTemperature
+		,max(temperature) over (partition by sensor, PrevGrouper) as PrevKnownTemperature
+		,count(NextGrouper ) over  (partition by sensor, nextgrouper order by time rows between unbounded preceding and unbounded following) as  CountNextGroup
+		from CreateGrouper )
+    --select * from Get_Next_Prev_Temperatures 
+	,
+	Get_Cumulative_total_For_next_group as (
+    select *
+--	    , max(NextKnownTemperature ) over (partition by nextgrouper) The_Max_per_Next_Group
+		,NextKnownTemperature-PrevKnownTemperature as The_Condition
+		,sum( 
+				((abs(NextKnownTemperature-PrevKnownTemperature ))/CountNextGroup )
+		    ) over (partition by sensor, nextgrouper order by nextgrouper rows between current row and unbounded following) NextGroupTotal
+		from Get_Next_Prev_Temperatures )
+		select 
+		    --sensor,time   ---- remark this and use asterisk to see all the columns
+			* 
+		    ,case when KnownTemperatureTime  is not null then NextKnownTemperature 
+			      when The_Condition >0 then	
+						PrevKnownTemperature +NextGroupTotal 
+				  else
+						PrevKnownTemperature - NextGroupTotal 
+			end as Temperature
+			,case when KnownTemperatureTime is not null then 'Real'
+				else 'Interpolated'
+			 end source
+			from Get_Cumulative_total_For_next_group 
+	order by 1,2
